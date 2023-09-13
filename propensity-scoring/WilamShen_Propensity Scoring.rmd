@@ -1,0 +1,311 @@
+---
+title: "HW4 Propensity Scores and IPTW: Answers"
+authors: "Wilam and Shen"
+output: pdf_document
+---
+
+**We are both submitting this assignment on NYU Classes.**
+
+```{r, echo=FALSE, message=FALSE}
+### Packages
+require(arm)
+require("Hmisc")
+require(MatchIt)
+require(optmatch)
+
+```
+
+### Question 1: Load the data and choose confounders (Step 1)
+```{r}
+### Answer 1
+load("hw4.Rdata")
+hw4 <- subset(hw4, bw<3000)
+#remove white and college to avoid multicolinearity, don't add momed and state indicators
+df <- data.frame(ppvtr.36=hw4$ppvtr.36, treat=hw4$treat, subset(hw4, select=c(bw, bwg, hispanic, black, b.marr, lths, hs, ltcoll, work.dur, prenatal, booze, cig, sex, first, preterm, momage, dayskidh, income)))
+covariates <- colnames(df)[3:length(colnames(df))]
+covariates
+
+
+```
+
+```{r}
+### Answer 2
+fit <- glm(treat ~ bw + bwg + hispanic + black + b.marr + lths + hs +
+ltcoll + work.dur + prenatal + booze + cig + sex + first + preterm + momage + dayskidh + income,
+family=binomial(link="logit"), data=df)
+#pscores <- predict(fit, type='response') #same as line below
+pscores <- fit$fitted.values
+df$pscores <- pscores #unnecessary
+
+```
+
+```{r}
+### Answer 3(a): We are interested in ATT 
+# because the research question asks about the children that did receive treatment. 
+```
+
+```{r}
+### Answer 3(b)
+matches <- matching(z=df$treat, score=pscores, replace=TRUE)
+weight <- c(rep(1,sum(df$treat==1)),matches$cnts)
+#weight <- ifelse(df$treat == 0, matches$cnts, 1)
+
+#saving weight as a unique variable for later
+weight1 <- weight
+```
+
+```{r}
+### Answer 4(a)
+
+require(ggplot2)
+plot <- ggplot() + geom_histogram(aes(subset(df, treat==1)$pscores), color="red", alpha=0) + geom_histogram(aes(subset(df, treat==0)$pscores), color="green", alpha=0) + ylim(0, 50)
+plot
+
+plot <- ggplot(data = df, aes(x = dayskidh)) + geom_density(data = subset(df, treat == 1), fill = "red", alpha = 0.7) + geom_density(data = subset(df, treat == 0), fill = "green", alpha = 0.7) + ylim(0,0.05)
+plot
+
+plot <- ggplot(data = df, aes(x = bw)) + geom_density(data = subset(df, treat == 1), fill = "red", alpha = 0.7) + xlim(1250, 3000) + geom_density(data = subset(df, treat == 0), fill = "green", alpha = 0.7) 
+plot
+```
+
+
+```{r}
+### Answer 4(b)
+# The overlap on pscores is not perfect. Even though 
+# there exist "empirical counterfactuals" for all
+# treated when pscore = 1 we will need to match many 
+# treated to the same control unit. In control group,
+# kids stay in average less time in the hospital, but 
+# there are enough units to create empirical
+# counterfactuals for all treated. In bw, there are empirical 
+# caunterfactuals for all treated except for the 1250 to 1500 range where 
+# there is no overlap. I include the low birthwight treated in my analysis
+# because I don't want to piroritize bw in my analysis.
+# Note, that if we were estimating ATC bw would be more problematic, 
+# because there are no counterfactuals for many
+# healthy controls. 
+# To summarize, there exist empirical copunterfactuals 
+# for all treated and therefore we are not violating asusmptions. 
+
+```
+
+
+```{r}
+### Answer 4(c)
+
+balance.function <- function(data, cov, weights){
+  
+  balance <- data.frame(covariate = numeric(0), mn1 = numeric(0), mn0 = numeric(0),mn1.m= numeric(0), mn0.m=numeric(0), diff= numeric(0), diff.m=numeric(0),ratio=numeric(0), ratio.m=numeric(0))
+
+  for(i in cov){
+    
+    mean_unmatched_control <- round(mean(subset(data, treat == 0)[,i]),3)
+    mean_unmatched_treated <- round(mean(subset(data, treat == 1)[,i]),3)
+    
+    mean_matched_control <- round(weighted.mean(data[data$treat==0, i], weights[data$treat==0]),3)
+    mean_matched_treated <- round(weighted.mean(data[data$treat==1, i], weights[data$treat==1]),3)
+    
+    unmatched_mean_difference <- round(ifelse(1 == range(data[,i])[2], mean_unmatched_treated - mean_unmatched_control, (mean_unmatched_treated - mean_unmatched_control)/sd(subset(data, treat == 1)[,i])), 3)
+    matched_mean_difference <- round(ifelse(1 == range(data[,i])[2], mean_matched_treated - mean_matched_control, (mean_matched_treated - mean_matched_control)/sd(subset(data, treat == 1)[,i])), 3)
+    
+    unmatched_sd_ratio <- round(ifelse(1 == range(data[,i])[2],0, sd(subset(data, treat == 0)[,i]) / sd(subset(data, treat == 1)[,i])),3)
+    
+    matched_sd_ratio <- ifelse(1 == range(data[,i])[2] , 0, round(sqrt(wtd.var(data[data$treat==0, i], weights[data$treat==0])) / sqrt(wtd.var(data[data$treat==1, i], weights[data$treat==1])),3))
+    
+    output <- list(i, mean_unmatched_treated, mean_unmatched_control,  mean_matched_treated, mean_matched_control, unmatched_mean_difference, matched_mean_difference, unmatched_sd_ratio, matched_sd_ratio)
+    balance[nrow(balance) + 1,] <- output
+#    print(output)
+  }
+return(balance)
+}
+
+first_balance <- balance.function(df, covariates, weight)
+first_balance
+
+```
+
+(d) How do you interpret the resulting balance?  In particular what are your concerns with regard to covariates that are not well balanced (3-4 sentences at most).
+
+```{r}
+### Answer 4(d)
+
+# I think the above balance is sufficient. I am worried about
+# the high ratio of standard deviation of dayskidh which might 
+# reflect the matching of many treated to same control. Other 
+# variables that are concerning are work.dur, income, momage, and dayskidh. 
+# Income could be a confounder and predict the parent treating the child
+# to high quality care independent of the study, but the difference
+# in incomes between the groups doesn't seem to be large enough to 
+# restructure the dataset. 
+
+```
+
+```{r}
+
+### 4(e) -- test
+df.test <- subset(data.frame(ppvtr.36=hw4$ppvtr.36, treat=hw4$treat, subset(hw4, select=c("bw", "b.marr"))), bw<3000)
+covariates.test <- colnames(df)[3:length(colnames(df))]
+test.fit <- glm(treat ~ bw + b.marr,family=binomial(link="logit"), data=df)
+pscores.test <- test.fit$fitted.values
+matches.t <- matching(z=df$treat, score=pscores.test, replace=TRUE)
+#weight.test <- ifelse(df.test$treat == 0, matches.test$cnts, 1)
+weight.test <- c(rep(1,sum(df.test$treat==1)),matches.t$cnts)
+temp <-balance.function(df.test, c("bw", "b.marr"), weights=weight.test)
+temp
+```
+
+\begin{verbatim}
+             mn1       mn0     mn1.m     mn0.m    diff  diff.m  ratio  ratio.m
+bw      2008.648  2629.482  2008.648  2001.838  -2.191   0.024  1.175   1.044
+b.marr     0.431     0.595     0.431     0.486  -0.164  -0.055  0.000   0.000
+\end{verbatim}
+
+```{r}
+### Answer 5
+
+# without replacement
+matches <- matching(z=df$treat, score=pscores, replace=FALSE)
+weight2 <- ifelse(matches$matched!=0, 1, 0)
+balance2 <- balance.function(df, covariates, weight2)
+#balance2
+
+# using matchit
+rownames(df) <- NULL
+match <- matchit(data = df, formula = treat ~ bw + bwg + hispanic + black + b.marr + lths + hs +
+ltcoll + work.dur + prenatal + booze + cig + sex + first + preterm + momage + dayskidh + income, method = "optimal")
+weight3 <- rep(0,nrow(df)) 
+weight3[as.numeric(match$match.matrix)] <- 1
+weight3[df$treat==1] <- 1
+balance3 <- balance.function(df, covariates, weight3)
+#balance3
+
+# different covariates. I add the indicator for states where the RCT 
+# was conducted and I treat square of bw as a covariate. 
+df <- data.frame(ppvtr.36=hw4$ppvtr.36, treat=hw4$treat, subset(hw4, select=c(bw, bwg, hispanic, black, b.marr, lths, hs, ltcoll, work.dur, prenatal, booze, cig, sex, first, preterm, momage, dayskidh, income, st9, st12, st25, st36, st42, st48, st53)))
+df$bw2 <- (df$bw)^2
+covariates_sq <- colnames(df)[3:length(colnames(df))]
+fit <- glm(treat ~ bw + I(bw^2) + bwg + hispanic + black + b.marr + lths + hs +
+ltcoll + work.dur + prenatal + booze + cig + sex + first + preterm + momage + dayskidh + income+ st9 + st12 + st25 + st36 + st42 + st48 + st53 ,
+family=binomial(link="logit"), data=df)
+#pscores <- predict(fit, type='response') #same as line below
+pscores <- fit$fitted.values
+matches <- matching(z=df$treat, score=pscores, replace=TRUE)
+weight4 <- c(rep(1,sum(df$treat==1)),matches$cnts)
+balance4 <- balance.function(df, covariates_sq, weight4)
+balance4
+```
+
+
+```{r}
+### Answer 6
+fit <- glm(treat ~ bw + bwg + hispanic + black + b.marr + lths + hs +
+ltcoll + work.dur + prenatal + booze + cig + sex + first + preterm + momage + dayskidh + income,
+family=binomial(link="logit"), data=df)
+#pscores <- predict(fit, type='response') #same as line below
+pscores <- fit$fitted.values
+
+pscores_c <- pscores[df$treat==0]
+pscores_c <- pscores_c/mean(pscores_c)
+
+weight_IPTW <- c(rep(1,sum(df$treat==1)), pscores_c)
+balance_IPTW <- balance.function(df, covariates, weight_IPTW)
+```
+
+
+```{r}
+### Answer 7
+comp_table <- data.frame(first_balance[,c(7,9)], balance2[,c(7,9)], balance3[,c(7,9)], balance4[c(1:18),c(7,9)], balance_IPTW[,c(7,9)], row.names=first_balance$covariate)
+colnames(comp_table) <- c("diff.m 1", "ratio.m 1", "diff.m 2", "ratio.m 2", "diff.m 3", "ratio.m 3", "diff.m 4" , "ratio.m 4", "diff.m IPTW", "ratio.m IPTW")
+comp_table
+
+# I would choose my first propensity score model
+# or IPTW because they have the best balance. First
+# model has better balance but matches many control units 
+# to one treated unit. As I explained in 4(c) the difference 
+# in means and ratio of standard deviations remains big for income
+# dayskidh and momage but they are still better than the other models. 
+# 
+
+```
+
+
+```{r}
+### Answer 8
+effect1 <- lm(ppvtr.36 ~ treat, data=df, weights = weight1)$coefficients[2]
+effect2 <- lm(ppvtr.36 ~ treat, data=df, weights = weight2)$coefficients[2]
+effect3 <- lm(ppvtr.36 ~ treat, data=df, weights = weight3)$coefficients[2]
+effect4 <- lm(ppvtr.36 ~ treat, data=df, weights = weight4)$coefficients[2]
+#effect5 <- lm(ppvtr.36 ~ treat, data=df, weights = weight5)$coefficients[2]
+effect_IPTW <- lm(ppvtr.36 ~ treat, data=df, weights = weight_IPTW)$coefficients[2]
+treatment_effect <- c(effect1, effect2, effect3, effect4, effect_IPTW)
+names(treatment_effect) <- c("effect1", "effect2","effect3","effect4", "effect_IPTW")
+treatment_effect
+```
+
+```{r}
+### Answer 9
+
+# (1) ignorability
+## We have measured all confounders and therefore we can 
+## ignore the effects of the unobserved factors. 
+
+# (2) sufficient overlap (positivity)
+## We can make inferences about treatment effect on the 
+## treated or controls only  over the area of common 
+## support. We have satisfied this asusmption when we 
+## have empirical counterfactuals for all treated (for ATT) 
+## or all controls (for ATC)
+
+# (3) appropriate specification of the propensity score model
+## We know the matching based on the propensity score 
+## model is appropriate when there is balance between 
+## the comparison groups
+
+# (4) Stable Unit Treatment Value Assumption
+## The assumption that the effect of treatment is independent 
+## of the composition of treatment selection
+
+# Parametric (5)
+## On the area of common support linearity holds. 
+
+```
+
+
+```{r}
+### Answer 10
+
+# Causal interpretation for my original propensity score estimate (effect1):
+# The average treatment effect on the treated (ATT) was 6.26 IQ 
+# points. In the counterfactual case without treatment, we would 
+# observe IQ scores 6.26 points lower on average after three years. 
+# We conclude that the treatment had causally contributed to a 
+# significant increase in children's IQ scores. 
+
+```
+
+### Question 11: Comparison to linear regression 
+Fit a regression of your outomes to the treatment indicator and covariates.
+(a)  Report your estimate and standard error.
+(b)  Interpret your results non-causally.
+(c)  Why might we prefer the results from the propensity score approach to the linear regression results in terms of identifying a causal effect?
+
+```{r}
+### Answer 11
+fit <- lm(ppvtr.36 ~ treat + bw + bwg + hispanic + black + b.marr + lths + hs +
+ltcoll + work.dur + prenatal + booze + cig + sex + first + preterm + momage + dayskidh + income, data=df)
+# (a)
+summary(fit)$coefficients[2,][1:2]
+
+# (b) 
+## Treatment is correlated with an IQ test score increase of 10.98.
+# Children who received treatment score better on the IQ test by an average of 10.98.
+
+# (c)
+## Linear regression violates the overlap assumption
+## and therefore cannot be used to identify causal effects. 
+## The treatment and control groups are not sufficiently simillar
+## to one another to warrant counterfactual inferences. 
+
+```
+
+
